@@ -20,14 +20,14 @@ def wn_linear(in_dim, out_dim):
 
 class WNConv2d(nn.Module):
     def __init__(
-        self,
-        in_channel,
-        out_channel,
-        kernel_size,
-        stride=1,
-        padding=0,
-        bias=True,
-        activation=None,
+            self,
+            in_channel,
+            out_channel,
+            kernel_size,
+            stride=1,
+            padding=0,
+            bias=True,
+            activation=None,
     ):
         super().__init__()
 
@@ -70,13 +70,13 @@ def shift_right(input, size=1):
 
 class CausalConv2d(nn.Module):
     def __init__(
-        self,
-        in_channel,
-        out_channel,
-        kernel_size,
-        stride=1,
-        padding='downright',
-        activation=None,
+            self,
+            in_channel,
+            out_channel,
+            kernel_size,
+            stride=1,
+            padding='downright',
+            activation=None,
     ):
         super().__init__()
 
@@ -112,7 +112,7 @@ class CausalConv2d(nn.Module):
         out = self.pad(input)
 
         if self.causal > 0:
-            self.conv.conv.weight_v.data[:, :, -1, self.causal :].zero_()
+            self.conv.conv.weight_v.data[:, :, -1, self.causal:].zero_()
 
         out = self.conv(out)
 
@@ -121,15 +121,15 @@ class CausalConv2d(nn.Module):
 
 class GatedResBlock(nn.Module):
     def __init__(
-        self,
-        in_channel,
-        channel,
-        kernel_size,
-        conv='wnconv2d',
-        activation=nn.ELU,
-        dropout=0.1,
-        auxiliary_channel=0,
-        condition_dim=0,
+            self,
+            in_channel,
+            channel,
+            kernel_size,
+            conv='wnconv2d',
+            activation=nn.ELU,
+            dropout=0.1,
+            auxiliary_channel=0,
+            condition_dim=0,
     ):
         super().__init__()
 
@@ -236,14 +236,14 @@ class CausalAttention(nn.Module):
 
 class PixelBlock(nn.Module):
     def __init__(
-        self,
-        in_channel,
-        channel,
-        kernel_size,
-        n_res_block,
-        attention=True,
-        dropout=0.1,
-        condition_dim=0,
+            self,
+            in_channel,
+            channel,
+            kernel_size,
+            n_res_block,
+            attention=True,
+            dropout=0.1,
+            condition_dim=0,
     ):
         super().__init__()
 
@@ -325,20 +325,20 @@ class CondResNet(nn.Module):
 
 class PixelSNAIL(nn.Module):
     def __init__(
-        self,
-        shape,
-        n_class,
-        channel,
-        kernel_size,
-        n_block,
-        n_res_block,
-        res_channel,
-        attention=True,
-        dropout=0.1,
-        n_cond_res_block=0,
-        cond_res_channel=0,
-        cond_res_kernel=3,
-        n_out_res_block=0,
+            self,
+            shape,
+            n_class,
+            channel,
+            kernel_size,
+            n_block,
+            n_res_block,
+            res_channel,
+            attention=True,
+            dropout=0.1,
+            n_cond_res_block=0,
+            cond_res_channel=0,
+            cond_res_kernel=3,
+            n_out_res_block=0,
     ):
         super().__init__()
 
@@ -397,10 +397,15 @@ class PixelSNAIL(nn.Module):
     def forward(self, input, condition=None, cache=None):
         if cache is None:
             cache = {}
-        batch, height, width = input.shape
-        input = (
-            F.one_hot(input, self.n_class).permute(0, 3, 1, 2).type_as(self.background)
-        )
+        if input.ndim == 3:
+            batch, height, width = input.shape
+            input = (
+                F.one_hot(input, self.n_class).permute(0, 3, 1, 2).type_as(self.background)
+            )
+        else:
+            batch, n_class, height, width = input.shape
+            assert n_class == self.n_class, f'[PixelSNAIL::forward] Number of classes mismatch ' \
+                                            f'(input: {n_class}, expected: {self.n_class})'
         horizontal = shift_down(self.horizontal(input))
         vertical = shift_right(self.vertical(input))
         out = horizontal + vertical
@@ -411,13 +416,15 @@ class PixelSNAIL(nn.Module):
             if 'condition' in cache:
                 condition = cache['condition']
                 condition = condition[:, :, :height, :]
-
             else:
-                condition = (
-                    F.one_hot(condition, self.n_class)
-                    .permute(0, 3, 1, 2)
-                    .type_as(self.background)
-                )
+                if condition.ndim == 3:
+                    condition = (
+                        F.one_hot(condition, self.n_class)
+                            .permute(0, 3, 1, 2)
+                            .type_as(self.background)
+                    )
+                else:
+                    condition = condition.type_as(self.background)
                 condition = self.cond_resnet(condition)
                 condition = F.interpolate(condition, scale_factor=2)
                 cache['condition'] = condition.detach().clone()
@@ -425,7 +432,5 @@ class PixelSNAIL(nn.Module):
 
         for block in self.blocks:
             out = block(out, background, condition=condition)
-
         out = self.out(out)
-
         return out, cache

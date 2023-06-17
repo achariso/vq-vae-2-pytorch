@@ -7,6 +7,7 @@
 
 from math import sqrt
 from functools import partial, lru_cache
+from typing import Optional
 
 import numpy as np
 import torch
@@ -353,10 +354,10 @@ class PixelSNAIL(nn.Module):
             kernel = kernel_size
 
         self.horizontal = CausalConv2d(
-            n_class, channel, [kernel // 2, kernel], padding='down'
+            self.n_class, channel, [kernel // 2, kernel], padding='down',
         )
         self.vertical = CausalConv2d(
-            n_class, channel, [(kernel + 1) // 2, kernel // 2], padding='downright'
+            self.n_class, channel, [(kernel + 1) // 2, kernel // 2], padding='downright'
         )
 
         coord_x = (torch.arange(height).float() - height / 2) / height
@@ -382,7 +383,7 @@ class PixelSNAIL(nn.Module):
 
         if n_cond_res_block > 0:
             self.cond_resnet = CondResNet(
-                n_class, cond_res_channel, cond_res_kernel, n_cond_res_block
+                self.n_class, cond_res_channel, cond_res_kernel, n_cond_res_block
             )
 
         out = []
@@ -390,24 +391,34 @@ class PixelSNAIL(nn.Module):
         for i in range(n_out_res_block):
             out.append(GatedResBlock(channel, res_channel, 1))
 
-        out.extend([nn.ELU(inplace=True), WNConv2d(channel, n_class, 1)])
+        out.extend([nn.ELU(inplace=True), WNConv2d(channel, self.n_class, 1)])
 
         self.out = nn.Sequential(*out)
 
-    def forward(self, input, condition=None, cache=None):
+    def forward(self, x: torch.Tensor, condition: Optional[torch.Tensor] = None, cache=None):
         if cache is None:
             cache = {}
-        if input.ndim == 3:
-            batch, height, width = input.shape
-            input = (
-                F.one_hot(input, self.n_class).permute(0, 3, 1, 2).type_as(self.background)
-            )
+        if x.ndim == 3 or (x.ndim == 4 and x.shape[1] == 1):
+            batch, height, width = x.squeeze(1).shape
+            x = F.one_hot(
+                x.squeeze(1),
+                self.n_class
+            ).permute(0, 3, 1, 2).type_as(self.background)
+            if condition is not None:
+                condition = F.one_hot(
+                    condition.squeeze(1),
+                    self.n_class
+                ).permute(0, 3, 1, 2).type_as(self.background)
         else:
-            batch, n_class, height, width = input.shape
+            batch, n_class, height, width = x.shape
             assert n_class == self.n_class, f'[PixelSNAIL::forward] Number of classes mismatch ' \
                                             f'(input: {n_class}, expected: {self.n_class})'
-        horizontal = shift_down(self.horizontal(input))
-        vertical = shift_right(self.vertical(input))
+            x = x.type_as(self.background)
+            if condition is not None:
+                condition = condition.type_as(self.background)
+
+        horizontal = shift_down(self.horizontal(x))
+        vertical = shift_right(self.vertical(x))
         out = horizontal + vertical
 
         background = self.background[:, :, :height, :].expand(batch, 2, height, width)
@@ -417,14 +428,6 @@ class PixelSNAIL(nn.Module):
                 condition = cache['condition']
                 condition = condition[:, :, :height, :]
             else:
-                if condition.ndim == 3:
-                    condition = (
-                        F.one_hot(condition, self.n_class)
-                            .permute(0, 3, 1, 2)
-                            .type_as(self.background)
-                    )
-                else:
-                    condition = condition.type_as(self.background)
                 condition = self.cond_resnet(condition)
                 condition = F.interpolate(condition, scale_factor=2)
                 cache['condition'] = condition.detach().clone()
